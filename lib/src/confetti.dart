@@ -30,6 +30,8 @@ class ConfettiWidget extends StatefulWidget {
     this.canvas,
     this.pauseEmissionOnLowFrameRate = true,
     this.createParticlePath,
+    this.useLinearColor = false,
+    this.gradient,
     this.child,
   })  : assert(
           emissionFrequency >= 0 &&
@@ -113,6 +115,17 @@ class ConfettiWidget extends StatefulWidget {
   /// Stroke color of the confetti (black by default, requires a strokeWidth > 0)
   final Color strokeColor;
 
+  /// The [useLinearColor] property determines whether the confetti colors
+  /// should be generated linearly. If true, Confetti will use the [gradient]
+  /// to render particles.
+  ///
+  /// Default is false
+  final bool useLinearColor;
+
+  /// The gradient to use when [useLinearColor] is true.
+  /// If null, a LinearGradient will be created from [colors].
+  final Gradient? gradient;
+
   /// An optional parameter to set the minimum size potential size for
   /// the confetti.
   ///
@@ -182,6 +195,8 @@ class _ConfettiWidgetState extends State<ConfettiWidget>
       maximumSize: widget.maximumSize,
       particleDrag: widget.particleDrag,
       createParticlePath: widget.createParticlePath,
+      useLinearColor: widget.useLinearColor,
+      gradient: widget.gradient,
     );
 
     _particleSystem.addListener(_particleSystemListener);
@@ -362,6 +377,9 @@ class _ConfettiWidgetState extends State<ConfettiWidget>
               strokeColor: widget.strokeColor,
               particles: _particleSystem.particles,
               paintEmitterTarget: widget.displayTarget,
+              useLinearColor: widget.useLinearColor,
+              colors: widget.colors,
+              gradient: widget.gradient,
             ),
             child: widget.child,
           ),
@@ -388,14 +406,14 @@ class ParticlePainter extends CustomPainter {
     Color emitterTargetColor = Colors.black,
     Color strokeColor = Colors.black,
     this.strokeWidth = 0,
+    this.useLinearColor = false,
+    this.colors,
+    this.gradient,
   })  : _paintEmitterTarget = paintEmitterTarget,
         _emitterPaint = Paint()
           ..color = emitterTargetColor
           ..style = PaintingStyle.stroke
           ..strokeWidth = 2.0,
-        _particlePaint = Paint()
-          ..color = Colors.green
-          ..style = PaintingStyle.fill,
         _particleStrokePaint = Paint()
           ..color = strokeColor
           ..strokeWidth = strokeWidth
@@ -403,10 +421,12 @@ class ParticlePainter extends CustomPainter {
         super(repaint: repaint);
 
   final List<Particle> particles;
+  final bool useLinearColor;
+  final Iterable<Color>? colors;
+  final Gradient? gradient;
 
   final Paint _emitterPaint;
   final bool _paintEmitterTarget;
-  final Paint _particlePaint;
   final Paint _particleStrokePaint;
   final double strokeWidth;
 
@@ -473,7 +493,38 @@ class ParticlePainter extends CustomPainter {
       );
 
       final finalPath = particle.path.transform(rotationMatrix4.storage);
-      canvas.drawPath(finalPath, _particlePaint..color = particle.color);
+
+      // Create paint for this particle
+      final particlePaint = Paint()..style = PaintingStyle.fill;
+
+      if (useLinearColor && gradient != null) {
+        // Use the provided gradient directly
+        final bounds = finalPath.getBounds();
+        particlePaint.shader = gradient!.createShader(bounds);
+
+        // Apply opacity from particle
+        particlePaint.color =
+            particlePaint.color.withOpacity(particle.color.opacity);
+      } else if (useLinearColor && colors != null && colors!.length >= 2) {
+        // Create linear gradient using the colors list
+        final bounds = finalPath.getBounds();
+
+        final linearGradient = LinearGradient(
+          begin: Alignment.topLeft,
+          end: Alignment.bottomCenter,
+          colors: colors!.toList(),
+        );
+        particlePaint.shader = linearGradient.createShader(bounds);
+
+        // Apply opacity from particle
+        particlePaint.color =
+            particlePaint.color.withOpacity(particle.color.opacity);
+      } else {
+        // Use solid color (existing behavior)
+        particlePaint.color = particle.color;
+      }
+
+      canvas.drawPath(finalPath, particlePaint);
       if (strokeWidth > 0) {
         canvas.drawPath(finalPath, _particleStrokePaint);
       }
