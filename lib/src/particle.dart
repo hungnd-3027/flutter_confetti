@@ -95,6 +95,9 @@ class ParticleSystem extends ChangeNotifier {
   late double _leftBorder;
 
   final Random _rand;
+  int _directionalSequenceIndex = 0;
+
+  static const double _directionalConeSpread = pi / 2;
 
   set particleSystemPosition(Offset position) {
     _particleSystemPosition = position;
@@ -104,6 +107,14 @@ class ParticleSystem extends ChangeNotifier {
     _screenSize = size;
     // needs to be called here to only set the borders once
     _setScreenBorderPositions();
+    // Update screen size for existing particles
+    _updateParticlesScreenSize(size);
+  }
+
+  void _updateParticlesScreenSize(Size size) {
+    for (final particle in _particles) {
+      particle._updateScreenSize(size);
+    }
   }
 
   void stopParticleEmission({bool clearAllParticles = false}) {
@@ -238,6 +249,8 @@ class ParticleSystem extends ChangeNotifier {
           _particleDrag,
           _createParticlePath,
           generateParticleForceCallback: _generateParticleForce,
+          screenSize: _screenSize,
+          emitterPosition: _particleSystemPosition,
         ),
       );
     }
@@ -250,20 +263,36 @@ class ParticleSystem extends ChangeNotifier {
     var blastDirection = _blastDirection;
     if (_blastDirectionality == BlastDirectionality.explosive) {
       blastDirection = _randomBlastDirection;
+    } else {
+      blastDirection = _blastDirection + _nextDirectionalConeOffset();
     }
-
-    // Expand firing area instead of single-point shooting.
-    const spread = pi / 2;
-
-    final randomOffset = (Random().nextDouble() - 0.5) * spread;
-
-    blastDirection = _blastDirection + randomOffset;
 
     final blastRadius = Helper.randomize(_minBlastForce, _maxBlastForce);
 
     final x = blastRadius * cos(blastDirection);
     final y = blastRadius * sin(blastDirection);
     return vmath.Vector2(x, y);
+  }
+
+  double _nextDirectionalConeOffset() {
+    if (_numberOfParticles <= 1) {
+      _directionalSequenceIndex++;
+      return 0;
+    }
+
+    final step = _directionalConeSpread / (_numberOfParticles - 1);
+    final indexInSequence = _directionalSequenceIndex % _numberOfParticles;
+    _directionalSequenceIndex++;
+
+    final baseOffset = -_directionalConeSpread / 2 + indexInSequence * step;
+    final jitter =
+        step == 0 ? 0.0 : Helper.randomize(-step * 0.15, step * 0.15);
+
+    final offset = (baseOffset + jitter)
+        .clamp(-_directionalConeSpread / 2, _directionalConeSpread / 2)
+        .toDouble();
+
+    return offset;
   }
 
   Color _randomColor() {
@@ -295,6 +324,8 @@ class Particle {
     double particleDrag,
     Path Function(Size size)? createParticlePath, {
     required this.generateParticleForceCallback,
+    Size? screenSize,
+    Offset? emitterPosition,
   })  : _startUpForce = generateParticleForceCallback(),
         _color = color,
         _mass = Helper.randomize(1, 11),
@@ -306,16 +337,17 @@ class Particle {
         _pathShape = createParticlePath != null
             ? createParticlePath(size)
             : createPath(size),
-        _aVelocityX = Helper.randomize(-0.1, 0.1),
-        _aVelocityY = Helper.randomize(-0.1, 0.1),
-        _aVelocityZ = Helper.randomize(-0.1, 0.1),
+        _aVelocityX = Helper.randomize(-0.1, 0.1) * _zRotationSpeedMultiplier,
+        _aVelocityY = Helper.randomize(-0.1, 0.1) * _zRotationSpeedMultiplier,
+        _aVelocityZ = Helper.randomize(-0.1, 0.1) * _zRotationSpeedMultiplier,
         _rotateZ = Helper.randomBool(),
         _windSeed = Random().nextDouble() * 1000,
         _baseWindDirection = Random().nextBool() ? 1.0 : -1.0,
         _windIntensity = _generateWindIntensityDistribution(),
         _maxLifetime = _calculateLifetimeBasedOnGravity(gravity),
-        _fadeStartRatio = Helper.randomize(0.7, 0.85),
+        _fadeStartRatio = Helper.randomize(0.3, 0.35),
         gravityVector = vmath.Vector2(0, lerpDouble(0.4, 5, gravity)!),
+        _screenSize = screenSize ?? Size.zero,
         _active = true;
 
   final double gravity;
@@ -352,21 +384,22 @@ class Particle {
 
   final double _maxLifetime;
   final double _fadeStartRatio;
+  Size
+      _screenSize; // Screen size for boundary calculations (non-final to allow updates)
 
   double _windSeed; // Changed from final to allow pattern changes
   double _baseWindDirection; // Changed from final to allow direction changes
-  final double _windIntensity;
+  final double _windIntensity; // Wind intensity for direction changes
 
-  // Direction change properties (only for windIntensity > 0.7)
   double _lastDirectionChangeTime = 0;
-  double _directionChangeInterval = 60; // Initial interval (1 second at 60fps)
+  double _directionChangeInterval = 60;
+
+  static const double _zRotationSpeedMultiplier = 1.5;
 
   static double _generateWindIntensityDistribution() {
     final random = Random().nextDouble();
 
-    if (random < 0.4) {
-      return Helper.randomize(0.0, 0.3);
-    } else if (random < 0.7) {
+    if (random < 0.7) {
       return Helper.randomize(0.3, 0.7);
     } else {
       return Helper.randomize(0.7, 1.0);
@@ -375,9 +408,9 @@ class Particle {
 
   static double _calculateLifetimeBasedOnGravity(double gravity) {
     // Approximation:
-    // gravity = 0.0 → lifetime = 360 frames
+    // gravity = 0.0 → lifetime = 420 frames
     // gravity = 1.0 → lifetime = 30 frames
-    final baseLifetime = lerpDouble(360, 30, gravity)!;
+    final baseLifetime = lerpDouble(420, 30, gravity)!;
 
     // Add a bit of randomness to create diversity
     final minLifetime = baseLifetime * 0.9;
@@ -419,9 +452,9 @@ class Particle {
     _aX = 0;
     _aY = 0;
     _aZ = 0;
-    _aVelocityX = Helper.randomize(-0.1, 0.1);
-    _aVelocityY = Helper.randomize(-0.1, 0.1);
-    _aVelocityZ = Helper.randomize(-0.1, 0.1);
+    _aVelocityX = Helper.randomize(-0.1, 0.1) * _zRotationSpeedMultiplier;
+    _aVelocityY = Helper.randomize(-0.1, 0.1) * _zRotationSpeedMultiplier;
+    _aVelocityZ = Helper.randomize(-0.2, 0.2) * _zRotationSpeedMultiplier;
 
     gravityVector.setValues(0, lerpDouble(0.3, 5, gravity)!);
 
@@ -465,13 +498,16 @@ class Particle {
 
     applyForce(gravityVector, deltaTimeSpeed);
 
-    // Check direction change for complex movement particles (windIntensity > 0.7)
-    if (_windIntensity > 0.7 && _timeAlive > 20) {
+    // Check for direction change for high intensity particles
+    if (_windIntensity > 0.5 && _timeAlive > 20) {
       _checkDirectionChange();
     }
 
     final windforceHorizontal = _calculateSmoothWindForce();
     applyForce(windforceHorizontal, deltaTimeSpeed);
+
+    _applyReturnForces(deltaTimeSpeed);
+
     _velocity.add(_acceleration * deltaTimeSpeed);
     _location.add(_velocity * deltaTimeSpeed);
     _acceleration.setZero();
@@ -486,11 +522,40 @@ class Particle {
 
     if (_rotateZ) {
       _aZ += _aVelocityZ * deltaTimeSpeed;
-      _aVelocityZ += _aAcceleration;
+      _aVelocityZ += _aAcceleration * _zRotationSpeedMultiplier;
     }
 
-    if (_timeAlive >= _maxLifetime) {
-      deactivate();
+    // if (_timeAlive >= _maxLifetime) {
+    //   deactivate();
+    // }
+  }
+
+  void _applyReturnForces(double deltaTimeSpeed) {
+    if (_screenSize.width <= 0 || _screenSize.height <= 0) {
+      return;
+    }
+
+    final halfWidth = _screenSize.width * 0.05 + _screenSize.width * 0.5;
+    final upwardLimit = -_screenSize.height * 0.05 + _screenSize.height * 0.5;
+
+    if (_location.x < -halfWidth && _velocity.x < 0) {
+      final overshootRatio =
+          ((-halfWidth - _location.x) / halfWidth).clamp(0.0, 1.5);
+      final correctionForce = (0.35 + overshootRatio * 0.9).clamp(0.35, 1.25);
+      applyForce(vmath.Vector2(correctionForce, 0), deltaTimeSpeed);
+    } else if (_location.x > halfWidth && _velocity.x > 0) {
+      final overshootRatio =
+          ((_location.x - halfWidth) / halfWidth).clamp(0.0, 1.5);
+      final correctionForce = (0.35 + overshootRatio * 0.9).clamp(0.35, 1.25);
+      applyForce(vmath.Vector2(-correctionForce, 0), deltaTimeSpeed);
+    }
+
+    if (_location.y < upwardLimit && _velocity.y < 0) {
+      final overshootRatio =
+          ((upwardLimit - _location.y).abs() / (_screenSize.height * 0.45))
+              .clamp(0.0, 1.5);
+      final correctionForce = (0.45 + overshootRatio * 1.1).clamp(0.45, 1.5);
+      applyForce(vmath.Vector2(0, correctionForce), deltaTimeSpeed);
     }
   }
 
@@ -525,19 +590,11 @@ class Particle {
   }
 
   vmath.Vector2 _calculateSmoothWindForce() {
-    final timeScale = _timeAlive * 0.03;
-
-    // Create 3 groups of particles with different behaviors to make the wind effect more natural:
-    // 1. Group falls straight down (windIntensity < 0.3)
-    // 2. Group falls slightly to the left/right (windIntensity 0.3-0.7)
-    // 3. Group with complex movement  windIntensity > 0.7)
+    final timeScale = _timeAlive * 0.2;
 
     double windForceX = 0;
 
-    if (_windIntensity < 0.3) {
-      final gentleWave = sin(timeScale + _windSeed) * 0.05;
-      windForceX = gentleWave;
-    } else if (_windIntensity < 0.7) {
+    if (_windIntensity < 0.7) {
       final slowWave = sin(timeScale + _windSeed) * 0.08;
       final mediumWave = sin(timeScale * 2.0 + _windSeed * 1.2) * 0.06;
       final windVariation = slowWave + mediumWave;
@@ -554,6 +611,11 @@ class Particle {
     }
     final windForceY = sin(timeScale * 2.0 + _windSeed) * 0.03;
     return vmath.Vector2(windForceX, windForceY);
+  }
+
+  /// Update screen size for boundary calculations
+  void _updateScreenSize(Size newSize) {
+    _screenSize = newSize;
   }
 
   Offset get location {
@@ -585,7 +647,7 @@ class Particle {
         (_timeAlive - fadeStartTime) / (_maxLifetime - fadeStartTime);
     final opacity = 1.0 - fadeProgress;
 
-    return opacity.clamp(0.0, 1.0);
+    return opacity.clamp(0.01, 1.0);
   }
 
   Path get path => _pathShape;
