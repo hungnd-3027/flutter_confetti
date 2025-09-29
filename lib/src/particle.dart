@@ -267,11 +267,22 @@ class ParticleSystem extends ChangeNotifier {
       blastDirection = _blastDirection + _nextDirectionalConeOffset();
     }
 
-    final blastRadius = Helper.randomize(_minBlastForce, _maxBlastForce);
+    final blastRadius = _generateWeightedBlastForce();
 
     final x = blastRadius * cos(blastDirection);
     final y = blastRadius * sin(blastDirection);
     return vmath.Vector2(x, y);
+  }
+
+  double _generateWeightedBlastForce() {
+    final random = Random().nextDouble();
+    final midForce = (_minBlastForce + _maxBlastForce) / 4;
+
+    if (random < 0.3) {
+      return Helper.randomize(midForce, _maxBlastForce);
+    } else {
+      return Helper.randomize(_minBlastForce, midForce);
+    }
   }
 
   double _nextDirectionalConeOffset() {
@@ -380,6 +391,7 @@ class Particle {
   final bool _rotateZ;
 
   double _timeAlive = 0;
+  double _timeAliveSeconds = 0.0; // Time-based for opacity calculation only
   vmath.Vector2 windforceUp = vmath.Vector2(0, -1);
 
   final double _maxLifetime;
@@ -407,14 +419,8 @@ class Particle {
   }
 
   static double _calculateLifetimeBasedOnGravity(double gravity) {
-    // Approximation:
-    // gravity = 0.0 → lifetime = 420 frames
-    // gravity = 1.0 → lifetime = 30 frames
-    final baseLifetime = lerpDouble(420, 30, gravity)!;
-
-    // Add a bit of randomness to create diversity
-    final minLifetime = baseLifetime * 0.9;
-    final maxLifetime = baseLifetime * 1.1;
+    const minLifetime = kParticleLifetimeSeconds * 0.9; // 6.3s
+    const maxLifetime = kParticleLifetimeSeconds * 1.1; // 7.7s
 
     return Helper.randomize(minLifetime, maxLifetime);
   }
@@ -441,6 +447,7 @@ class Particle {
 
   void reactivate() {
     _timeAlive = 0;
+    _timeAliveSeconds = 0.0;
 
     final f = generateParticleForceCallback();
     _startUpForce.setValues(f.x, f.y);
@@ -491,10 +498,9 @@ class Particle {
     if (_timeAlive < 5) {
       applyForce(_startUpForce, deltaTimeSpeed);
     }
-    if (_timeAlive < 25) {
-      applyForce(windforceUp, deltaTimeSpeed);
-      _timeAlive += 1;
-    }
+    // if (_timeAlive < 25) {
+    //   applyForce(windforceUp, deltaTimeSpeed);
+    // }
 
     applyForce(gravityVector, deltaTimeSpeed);
 
@@ -513,6 +519,7 @@ class Particle {
     _acceleration.setZero();
 
     _timeAlive += 1;
+    _timeAliveSeconds += deltaTime;
 
     _aVelocityX += _aAcceleration;
     _aX += _aVelocityX * deltaTimeSpeed;
@@ -535,24 +542,28 @@ class Particle {
       return;
     }
 
-    final halfWidth = _screenSize.width * 0.05 + _screenSize.width * 0.5;
-    final upwardLimit = -_screenSize.height * 0.05 + _screenSize.height * 0.5;
+    final horizontalBoundary = _screenSize.width * 0.55;
 
-    if (_location.x < -halfWidth && _velocity.x < 0) {
+    final topOfScreen = -_screenSize.height * 0.5;
+    final upwardBoundary = topOfScreen - _screenSize.height * 0.1;
+
+    if (_location.x < -horizontalBoundary && _velocity.x < 0) {
       final overshootRatio =
-          ((-halfWidth - _location.x) / halfWidth).clamp(0.0, 1.5);
+          ((-horizontalBoundary - _location.x) / horizontalBoundary)
+              .clamp(0.0, 1.5);
       final correctionForce = (0.35 + overshootRatio * 0.9).clamp(0.35, 1.25);
       applyForce(vmath.Vector2(correctionForce, 0), deltaTimeSpeed);
-    } else if (_location.x > halfWidth && _velocity.x > 0) {
+    } else if (_location.x > horizontalBoundary && _velocity.x > 0) {
       final overshootRatio =
-          ((_location.x - halfWidth) / halfWidth).clamp(0.0, 1.5);
+          ((_location.x - horizontalBoundary) / horizontalBoundary)
+              .clamp(0.0, 1.5);
       final correctionForce = (0.35 + overshootRatio * 0.9).clamp(0.35, 1.25);
       applyForce(vmath.Vector2(-correctionForce, 0), deltaTimeSpeed);
     }
 
-    if (_location.y < upwardLimit && _velocity.y < 0) {
+    if (_location.y < upwardBoundary && _velocity.y < 0) {
       final overshootRatio =
-          ((upwardLimit - _location.y).abs() / (_screenSize.height * 0.45))
+          ((upwardBoundary - _location.y).abs() / (_screenSize.height * 0.45))
               .clamp(0.0, 1.5);
       final correctionForce = (0.45 + overshootRatio * 1.1).clamp(0.45, 1.5);
       applyForce(vmath.Vector2(0, correctionForce), deltaTimeSpeed);
@@ -634,17 +645,17 @@ class Particle {
 
   double _calculateOpacity() {
     final fadeStartTime = _maxLifetime * _fadeStartRatio;
-    if (_timeAlive <= fadeStartTime) {
+    if (_timeAliveSeconds <= fadeStartTime) {
       return 1.0;
     }
 
-    if (_timeAlive >= _maxLifetime) {
+    if (_timeAliveSeconds >= _maxLifetime) {
       return 0.0;
     }
 
     // Calculate opacity fading from fadeStartTime to maxLifetime
     final fadeProgress =
-        (_timeAlive - fadeStartTime) / (_maxLifetime - fadeStartTime);
+        (_timeAliveSeconds - fadeStartTime) / (_maxLifetime - fadeStartTime);
     final opacity = 1.0 - fadeProgress;
 
     return opacity.clamp(0.01, 1.0);
